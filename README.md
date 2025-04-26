@@ -2,6 +2,9 @@
 
 Simple tool to detect SDKs used in Android apps
 
+> [!WARNING]
+> Early development, not for production use
+
 ## Installation
 
 ### As CLI Tool only
