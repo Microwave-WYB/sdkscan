@@ -1,16 +1,11 @@
 [project]
 name = "sdkscan"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.1.1"
+description = "Scan SDKs used in Android APK files"
 readme = "README.md"
-authors = [
-    { name = "Yibo Wei", email = "david_wyb2001@outlook.com" }
-]
+authors = [{ name = "Yibo Wei", email = "david_wyb2001@outlook.com" }]
 requires-python = ">=3.13"
-dependencies = [
-    "pydantic>=2.11.3",
-    "typer-slim>=0.15.2",
-]
+dependencies = ["pydantic>=2.11.3", "typer-slim>=0.15.2"]
 
 [project.scripts]
 sdkscan = "sdkscan:main"

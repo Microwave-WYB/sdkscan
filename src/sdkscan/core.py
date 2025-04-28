@@ -1,14 +1,10 @@
-from enum import IntFlag, auto
-import re
-from functools import partial, reduce
-from pathlib import Path
-from collections.abc import Callable
 import io
+import re
 import zipfile
-from pydantic import BaseModel
+from enum import IntFlag, auto
+from pathlib import Path
 
-# Takes path, returns True if SDK is detected
-type SdkDetectorFn = Callable[[io.BytesIO | Path | str], bool]
+from pydantic import BaseModel
 
 
 class XAPKManifest(BaseModel):
@@ -34,107 +30,113 @@ class XAPKManifest(BaseModel):
         return next((apk.file for apk in self.split_apks if apk.id == "base"), None)
 
 
-def has_file(zip_binary: io.BytesIO | Path | str, target_regex: str) -> bool:
-    with zipfile.ZipFile(zip_binary) as zip_file:
-        return any(
-            filter(
-                lambda x: re.search(target_regex, str(x)),
-                zip_file.namelist(),
-            )
-        )
-
-
-def has_content(zip_binary: io.BytesIO | Path | str, target_regex: str, content_regex: str) -> bool:
-    with zipfile.ZipFile(zip_binary) as zip_file:
-        matching_files = list(
-            filter(
-                lambda x: re.search(target_regex, str(x)),
-                zip_file.namelist(),
-            )
-        )
-
-        if not matching_files:
-            return False
-
-        try:
-            for file in matching_files:
-                if re.search(content_regex, zip_file.read(file).decode("utf-8")):
-                    return True
-            return False
-        except (KeyError, UnicodeDecodeError):
-            return False
-
-
-is_xapk = partial(has_file, target_regex="^manifest.json")
-
-
-def support_xapk(fn: SdkDetectorFn) -> SdkDetectorFn:
-    def wrapper(file: io.BytesIO | Path | str) -> bool:
-        if not is_xapk(file):
-            return fn(file)
-
-        with zipfile.ZipFile(file) as xapk:
-            return (
-                False
-                if (
-                    base_apk := XAPKManifest.model_validate_json(
-                        xapk.read("manifest.json")
-                    ).base_apk
-                )
-                is None
-                else wrapper(io.BytesIO(xapk.read(base_apk)))
-            )
-
-    return wrapper
-
-
-is_kotlin = support_xapk(
-    partial(has_file, target_regex=r"^kotlin/"),
-)
-is_react_native = support_xapk(
-    partial(has_file, target_regex=r".*index\.android\.bundle"),
-)
-is_flutter = support_xapk(
-    partial(has_file, target_regex=r"^lib/.*/libflutter\.so"),
-)
-is_dotnet = support_xapk(
-    partial(has_file, target_regex=r"^lib/.*/libmono.*\.so"),
-)
-is_xamarin = support_xapk(
-    partial(has_file, target_regex=r"^lib/.*/libxamarin-app\.so"),
-)
-is_cordova = support_xapk(
-    partial(has_file, target_regex=r"^assets/www/cordova\.js"),
-)
-is_ionic = support_xapk(
-    partial(has_content, target_regex=r"^assets/www/manifest\.js", content_regex=r"Ionic"),
-)
-
-
 class Sdks(IntFlag):
+    ANDROID_DALVIK = auto()
     ANDROID_KOTLIN = auto()
+    KMP = auto()
     REACT_NATIVE = auto()
     FLUTTER = auto()
     DOTNET = auto()
     XAMARIN = auto()
+    MAUI = auto()
     CORDOVA = auto()
     IONIC = auto()
 
-    @staticmethod
-    def get_detector() -> dict["Sdks", Callable[[io.BytesIO | Path | str], bool]]:
-        return {
-            Sdks.ANDROID_KOTLIN: is_kotlin,
-            Sdks.REACT_NATIVE: is_react_native,
-            Sdks.FLUTTER: is_flutter,
-            Sdks.DOTNET: is_dotnet,
-            Sdks.XAMARIN: is_xamarin,
-            Sdks.CORDOVA: is_cordova,
-            Sdks.IONIC: is_ionic,
-        }
 
-    @classmethod
-    def from_apk(cls, apk: io.BytesIO | Path | str) -> "Sdks":
-        detected_sdks = {sdk for sdk, detector in Sdks.get_detector().items() if detector(apk)}
+def is_android_dalvik(zip_file: zipfile.ZipFile, name: str) -> bool:
+    return bool(re.search(r"\.dex$", name))
 
-        # Return the combined flags or 0 if none detected
-        return reduce(lambda x, y: x | y, detected_sdks) if detected_sdks else cls(0)
+
+def is_android_kotlin(zip_file: zipfile.ZipFile, name: str) -> bool:
+    return bool(re.search(r"^kotlin/", name))
+
+
+def is_kmp(zip_file: zipfile.ZipFile, name: str) -> bool:
+    return bool(re.search(r".*\.knm", name))
+
+
+def is_react_native(zip_file: zipfile.ZipFile, name: str) -> bool:
+    return bool(re.search(r".*index\.android\.bundle", name))
+
+
+def is_flutter(zip_file: zipfile.ZipFile, name: str) -> bool:
+    return bool(re.search(r"^lib/.*/libflutter\.so", name))
+
+
+def is_dotnet(zip_file: zipfile.ZipFile, name: str) -> bool:
+    return bool(
+        re.search(r"^lib/.*/libmono.*\.so", name)
+        or re.search(r"^assemblies/assemblies\.blob", name)
+    )
+
+
+def is_xamarin(zip_file: zipfile.ZipFile, name: str) -> bool:
+    return bool(re.search(r"^lib/.*/libxamarin-app\.so", name))
+
+
+def is_maui(zip_file: zipfile.ZipFile, name: str) -> bool:
+    return bool(re.search(r"^lib/.*Microsoft.Maui.*\.so", name))
+
+
+def is_cordova(zip_file: zipfile.ZipFile, name: str) -> bool:
+    return bool(re.search(r"^assets/www/cordova\.js", name))
+
+
+def is_ionic(zip_file: zipfile.ZipFile, name: str) -> bool:
+    if not re.search(r"^assets/www/manifest\.js", name):
+        return False
+
+    try:
+        content = zip_file.read(name).decode("utf-8")
+        return "Ionic" in content
+    except (UnicodeDecodeError, KeyError):
+        return False
+
+
+def is_xapk(file: io.BytesIO | Path | str) -> bool:
+    with zipfile.ZipFile(file) as zip_file:
+        return "manifest.json" in zip_file.namelist()
+
+
+def scan(file_path: io.BytesIO | Path | str) -> Sdks:
+    # If this is an XAPK, extract the base APK and scan that instead
+    if is_xapk(file_path):
+        with zipfile.ZipFile(file_path) as xapk:
+            manifest_data = xapk.read("manifest.json")
+            manifest = XAPKManifest.model_validate_json(manifest_data)
+            base_apk = manifest.base_apk
+            if base_apk is None:
+                return Sdks(0)
+            return scan(io.BytesIO(xapk.read(base_apk)))
+
+    # Map of detector functions to their respective SdkStack flags
+    detectors = {
+        Sdks.ANDROID_DALVIK: is_android_dalvik,
+        Sdks.ANDROID_KOTLIN: is_android_kotlin,
+        Sdks.KMP: is_kmp,
+        Sdks.REACT_NATIVE: is_react_native,
+        Sdks.FLUTTER: is_flutter,
+        Sdks.DOTNET: is_dotnet,
+        Sdks.XAMARIN: is_xamarin,
+        Sdks.MAUI: is_maui,
+        Sdks.CORDOVA: is_cordova,
+        Sdks.IONIC: is_ionic,
+    }
+
+    # Start with no SDKs detected
+    detected_sdks = Sdks(0)
+
+    with zipfile.ZipFile(file_path) as zip_file:
+        file_list = zip_file.namelist()
+
+        # Scan through all files in the zip
+        for name in file_list:
+            for sdk, detector in detectors.items():
+                # Skip if we've already detected this SDK
+                if sdk in detected_sdks:
+                    continue
+
+                # Run the detector, passing it the zip_file and filename
+                if detector(zip_file, name):
+                    detected_sdks |= sdk
+    return detected_sdks

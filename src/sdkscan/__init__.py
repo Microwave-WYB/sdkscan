@@ -1,9 +1,9 @@
 from sdkscan.cli import app
-from sdkscan.core import Sdks
+from sdkscan.core import Sdks, scan
 
 
 def main() -> None:
     app()
 
 
-__all__ = ["Sdks"]
+__all__ = ["Sdks", "scan"]
