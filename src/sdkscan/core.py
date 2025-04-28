@@ -3,6 +3,7 @@ import re
 import zipfile
 from enum import IntFlag, auto
 from pathlib import Path
+from collections.abc import Callable
 
 from pydantic import BaseModel
 
@@ -33,7 +34,7 @@ class XAPKManifest(BaseModel):
 class Sdks(IntFlag):
     ANDROID_DALVIK = auto()
     ANDROID_KOTLIN = auto()
-    KMP = auto()
+    KOTLIN_MULTI_PLATFORM = auto()
     REACT_NATIVE = auto()
     FLUTTER = auto()
     DOTNET = auto()
@@ -41,28 +42,58 @@ class Sdks(IntFlag):
     MAUI = auto()
     CORDOVA = auto()
     IONIC = auto()
+    TITANIUM = auto()
+    UNITY = auto()
+    UNREAL_ENGINE = auto()
 
 
+class SdkDetectors(dict[Sdks, Callable[[zipfile.ZipFile, str], bool]]):
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(SdkDetectors, cls).__new__(cls)
+        return cls._instance
+
+    @staticmethod
+    def register(
+        sdks: Sdks,
+    ) -> Callable[[Callable[[zipfile.ZipFile, str], bool]], Callable[[zipfile.ZipFile, str], bool]]:
+        def decorator(
+            func: Callable[[zipfile.ZipFile, str], bool],
+        ) -> Callable[[zipfile.ZipFile, str], bool]:
+            SdkDetectors()[sdks] = func
+            return func
+
+        return decorator
+
+
+@SdkDetectors.register(Sdks.ANDROID_DALVIK)
 def is_android_dalvik(zip_file: zipfile.ZipFile, name: str) -> bool:
     return bool(re.search(r"\.dex$", name))
 
 
+@SdkDetectors.register(Sdks.ANDROID_KOTLIN)
 def is_android_kotlin(zip_file: zipfile.ZipFile, name: str) -> bool:
     return bool(re.search(r"^kotlin/", name))
 
 
+@SdkDetectors.register(Sdks.KOTLIN_MULTI_PLATFORM)
 def is_kmp(zip_file: zipfile.ZipFile, name: str) -> bool:
     return bool(re.search(r".*\.knm", name))
 
 
+@SdkDetectors.register(Sdks.REACT_NATIVE)
 def is_react_native(zip_file: zipfile.ZipFile, name: str) -> bool:
     return bool(re.search(r".*index\.android\.bundle", name))
 
 
+@SdkDetectors.register(Sdks.FLUTTER)
 def is_flutter(zip_file: zipfile.ZipFile, name: str) -> bool:
     return bool(re.search(r"^lib/.*/libflutter\.so", name))
 
 
+@SdkDetectors.register(Sdks.DOTNET)
 def is_dotnet(zip_file: zipfile.ZipFile, name: str) -> bool:
     return bool(
         re.search(r"^lib/.*/libmono.*\.so", name)
@@ -70,18 +101,22 @@ def is_dotnet(zip_file: zipfile.ZipFile, name: str) -> bool:
     )
 
 
+@SdkDetectors.register(Sdks.XAMARIN)
 def is_xamarin(zip_file: zipfile.ZipFile, name: str) -> bool:
     return bool(re.search(r"^lib/.*/libxamarin-app\.so", name))
 
 
+@SdkDetectors.register(Sdks.MAUI)
 def is_maui(zip_file: zipfile.ZipFile, name: str) -> bool:
-    return bool(re.search(r"^lib/.*Microsoft.Maui.*\.so", name))
+    return bool(re.search(r"^lib/.*/.*Microsoft.Maui.*\.so", name))
 
 
+@SdkDetectors.register(Sdks.CORDOVA)
 def is_cordova(zip_file: zipfile.ZipFile, name: str) -> bool:
     return bool(re.search(r"^assets/www/cordova\.js", name))
 
 
+@SdkDetectors.register(Sdks.IONIC)
 def is_ionic(zip_file: zipfile.ZipFile, name: str) -> bool:
     if not re.search(r"^assets/www/manifest\.js", name):
         return False
@@ -89,8 +124,31 @@ def is_ionic(zip_file: zipfile.ZipFile, name: str) -> bool:
     try:
         content = zip_file.read(name).decode("utf-8")
         return "Ionic" in content
-    except (UnicodeDecodeError, KeyError):
+    except UnicodeDecodeError:
         return False
+
+
+@SdkDetectors.register(Sdks.TITANIUM)
+def is_titanium(zip_file: zipfile.ZipFile, name: str) -> bool:
+    return bool(
+        re.search(r"^lib/.*/libti\..*\.so", name)
+        or name in ("assets/Resources/ti.kernel.js.bin", "assets/Resources/ti.main.js.bin")
+    )
+
+
+@SdkDetectors.register(Sdks.UNITY)
+def is_unity(zip_file: zipfile.ZipFile, name: str) -> bool:
+    return bool(
+        re.search(r"^lib/.*/libunity\.so", name)
+        or name == "assets/bin/Data/Resources/unity_builtin_extra"
+    )
+
+
+@SdkDetectors.register(Sdks.UNREAL_ENGINE)
+def is_unreal_engine(zip_file: zipfile.ZipFile, name: str) -> bool:
+    return bool(
+        re.search(r"^lib/.*/libUE\d+\.so", name)  # Match libUE4.so, libUE5.so, etc.
+    )
 
 
 def is_xapk(file: io.BytesIO | Path | str) -> bool:
@@ -109,20 +167,6 @@ def scan(file_path: io.BytesIO | Path | str) -> Sdks:
                 return Sdks(0)
             return scan(io.BytesIO(xapk.read(base_apk)))
 
-    # Map of detector functions to their respective SdkStack flags
-    detectors = {
-        Sdks.ANDROID_DALVIK: is_android_dalvik,
-        Sdks.ANDROID_KOTLIN: is_android_kotlin,
-        Sdks.KMP: is_kmp,
-        Sdks.REACT_NATIVE: is_react_native,
-        Sdks.FLUTTER: is_flutter,
-        Sdks.DOTNET: is_dotnet,
-        Sdks.XAMARIN: is_xamarin,
-        Sdks.MAUI: is_maui,
-        Sdks.CORDOVA: is_cordova,
-        Sdks.IONIC: is_ionic,
-    }
-
     # Start with no SDKs detected
     detected_sdks = Sdks(0)
 
@@ -131,7 +175,7 @@ def scan(file_path: io.BytesIO | Path | str) -> Sdks:
 
         # Scan through all files in the zip
         for name in file_list:
-            for sdk, detector in detectors.items():
+            for sdk, detector in SdkDetectors().items():
                 # Skip if we've already detected this SDK
                 if sdk in detected_sdks:
                     continue
