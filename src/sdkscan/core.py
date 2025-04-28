@@ -1,5 +1,6 @@
 import io
 import re
+import itertools
 import zipfile
 from enum import IntFlag, auto
 from pathlib import Path
@@ -173,14 +174,7 @@ def scan(file_path: io.BytesIO | Path | str) -> Sdks:
     with zipfile.ZipFile(file_path) as zip_file:
         file_list = zip_file.namelist()
 
-        # Scan through all files in the zip
-        for name in file_list:
-            for sdk, detector in SdkDetectors().items():
-                # Skip if we've already detected this SDK
-                if sdk in detected_sdks:
-                    continue
-
-                # Run the detector, passing it the zip_file and filename
-                if detector(zip_file, name):
-                    detected_sdks |= sdk
+        for name, (sdk, detector) in itertools.product(file_list, SdkDetectors().items()):
+            if sdk not in detected_sdks and detector(zip_file, name):
+                detected_sdks |= sdk
     return detected_sdks
