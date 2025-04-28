@@ -152,29 +152,17 @@ def is_unreal_engine(zip_file: zipfile.ZipFile, name: str) -> bool:
     )
 
 
-def is_xapk(file: io.BytesIO | Path | str) -> bool:
-    with zipfile.ZipFile(file) as zip_file:
-        return "manifest.json" in zip_file.namelist()
-
-
 def scan(file_path: io.BytesIO | Path | str) -> Sdks:
-    # If this is an XAPK, extract the base APK and scan that instead
-    if is_xapk(file_path):
-        with zipfile.ZipFile(file_path) as xapk:
-            manifest_data = xapk.read("manifest.json")
-            manifest = XAPKManifest.model_validate_json(manifest_data)
-            base_apk = manifest.base_apk
-            if base_apk is None:
-                return Sdks(0)
-            return scan(io.BytesIO(xapk.read(base_apk)))
-
-    # Start with no SDKs detected
-    detected_sdks = Sdks(0)
-
     with zipfile.ZipFile(file_path) as zip_file:
-        file_list = zip_file.namelist()
+        if "manifest.json" in zip_file.namelist():
+            match XAPKManifest.model_validate_json(zip_file.read("manifest.json")).base_apk:
+                case None:
+                    return Sdks(0)
+                case base_apk:
+                    return scan(io.BytesIO(zip_file.read(base_apk)))
 
-        for name, (sdk, detector) in itertools.product(file_list, SdkDetectors().items()):
+        detected_sdks = Sdks(0)
+        for name, (sdk, detector) in itertools.product(zip_file.namelist(), SdkDetectors().items()):
             if sdk not in detected_sdks and detector(zip_file, name):
                 detected_sdks |= sdk
-    return detected_sdks
+        return detected_sdks
