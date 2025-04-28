@@ -49,9 +49,9 @@ FLUTTER
 ### As Python Module
 
 ```python
-from sdkscan import Sdks
+from sdkscan import scan
 
-sdks = Sdks.from_apk('example.apk')
+sdks = scan('example.apk')
 for sdk in sdks:
     print(sdk.name)
 ```
