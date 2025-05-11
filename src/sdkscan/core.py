@@ -1,3 +1,4 @@
+from functools import reduce
 import io
 import re
 import itertools
@@ -44,6 +45,7 @@ class Sdks(IntFlag):
     CORDOVA = auto()
     IONIC = auto()
     TITANIUM = auto()
+    QT = auto()
     UNITY = auto()
     UNREAL_ENGINE = auto()
 
@@ -137,6 +139,11 @@ def is_titanium(zip_file: zipfile.ZipFile, name: str) -> bool:
     )
 
 
+@SdkDetectors.register(Sdks.QT)
+def is_qt(zip_file: zipfile.ZipFile, name: str) -> bool:
+    return bool(re.search(r"^lib/.*/libQt.*\.so", name))
+
+
 @SdkDetectors.register(Sdks.UNITY)
 def is_unity(zip_file: zipfile.ZipFile, name: str) -> bool:
     return bool(
@@ -155,11 +162,11 @@ def is_unreal_engine(zip_file: zipfile.ZipFile, name: str) -> bool:
 def scan(file_path: io.BytesIO | Path | str) -> Sdks:
     with zipfile.ZipFile(file_path) as zip_file:
         if "manifest.json" in zip_file.namelist():
-            match XAPKManifest.model_validate_json(zip_file.read("manifest.json")).base_apk:
-                case None:
-                    return Sdks(0)
-                case base_apk:
-                    return scan(io.BytesIO(zip_file.read(base_apk)))
+            manifest = XAPKManifest.model_validate_json(zip_file.read("manifest.json"))
+            return reduce(
+                lambda x, y: x | y,
+                (scan(io.BytesIO(zip_file.read(apk.file))) for apk in manifest.split_apks),
+            )
 
         detected_sdks = Sdks(0)
         for name, (sdk, detector) in itertools.product(zip_file.namelist(), SdkDetectors().items()):
