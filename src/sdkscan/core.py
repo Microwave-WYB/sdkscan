@@ -1,11 +1,12 @@
-from functools import reduce
 import io
-import re
 import itertools
+import re
 import zipfile
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from enum import IntFlag, auto
+from functools import reduce
 from pathlib import Path
-from collections.abc import Callable
 
 from pydantic import BaseModel
 
@@ -173,3 +174,12 @@ def scan(file_path: io.BytesIO | Path | str) -> Sdks:
             if sdk not in detected_sdks and detector(zip_file, name):
                 detected_sdks |= sdk
         return detected_sdks
+
+
+def batch_scan(
+    file_paths: list[Path],
+) -> Iterator[tuple[Path, Sdks]]:
+    with ThreadPoolExecutor(32) as executor:
+        yield from (
+            (file_path, sdk) for file_path, sdk in zip(file_paths, executor.map(scan, file_paths))
+        )
